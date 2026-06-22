@@ -18,6 +18,11 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
     }
 
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, String>> handleBadRequest(IllegalArgumentException e) {
+        return ResponseEntity.status(400).body(Map.of("error", e.getMessage()));
+    }
+
     @ExceptionHandler(LlmInvocationException.class)
     public ResponseEntity<Map<String, String>> handleLlmError(LlmInvocationException e) {
         return ResponseEntity.status(502).body(Map.of("error", e.getMessage()));

@@ -24,8 +24,9 @@ public class FlexService {
     private final QueueService queueService;
     private final AuditService auditService;
     private final QueueRequestRepository queueRequestRepository;
+    private final FlexEscalator flexEscalator;
 
-    @Value("${flex.escalation-seconds:9}")
+    @Value("${flex.escalation-seconds:8}")
     private int escalationSeconds;
 
     public Map<String, Object> handle(String modelName, Map<String, Object> payload) throws InterruptedException {
@@ -66,11 +67,11 @@ public class FlexService {
                 }
             }
 
-            // At 9s - unconditionally escalate and dispatch as priority, no capacity check
+            // At 8s - unconditionally escalate and dispatch as priority, no capacity check
             if (elapsed >= escalationSeconds) {
                 log.warn("[FLEX] Request {} waited {}s - escalating to priority dispatch for model {}",
                         queued.getId(), elapsed, modelName);
-                return escalateAsPriority(queued.getId(), requestId, modelName, payload, dispatchedAt, enqueueTime);
+                return flexEscalator.escalate(queued.getId(), requestId, modelName, payload, dispatchedAt, enqueueTime);
             }
 
             Thread.sleep(1000);
@@ -97,36 +98,4 @@ public class FlexService {
         }
     }
 
-    private Map<String, Object> escalateAsPriority(UUID queuedId, UUID requestId, String modelName,
-                                                     Map<String, Object> payload, OffsetDateTime dispatchedAt,
-                                                     long enqueueTime) {
-        // Mark as processing so worker skips it
-        QueueRequest q = queueRequestRepository.findById(queuedId).orElseThrow();
-        q.setStatus(RequestStatus.processing);
-        queueRequestRepository.save(q);
-
-        long start = System.currentTimeMillis();
-        try {
-            queueService.logDispatched(modelName, RequestMode.priority);
-            Map<String, Object> response = llmClient.chat(modelName, payload);
-            int ms = (int) (System.currentTimeMillis() - enqueueTime);
-            q.setStatus(RequestStatus.completed);
-            q.setResult(response);
-            q.setProcessedAt(OffsetDateTime.now());
-            queueRequestRepository.save(q);
-            log.info("[FLEX] Request {} escalated to priority and completed for model {} in {}ms", queuedId, modelName, ms);
-            auditService.recordQueued(requestId, queuedId, modelName, RequestMode.priority,
-                    payload, response, RequestStatus.completed, ms, null, dispatchedAt);
-            return response;
-        } catch (Exception e) {
-            int ms = (int) (System.currentTimeMillis() - start);
-            q.setStatus(RequestStatus.failed);
-            q.setErrorMessage(e.getMessage());
-            queueRequestRepository.save(q);
-            log.error("[FLEX] Request {} failed during priority escalation for model {}: {}", queuedId, modelName, e.getMessage());
-            auditService.recordQueued(requestId, queuedId, modelName, RequestMode.priority,
-                    payload, null, RequestStatus.failed, ms, e.getMessage(), dispatchedAt);
-            throw new LlmInvocationException(e.getMessage());
-        }
-    }
 }

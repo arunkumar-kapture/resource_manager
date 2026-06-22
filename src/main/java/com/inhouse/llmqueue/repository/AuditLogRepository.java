@@ -13,16 +13,26 @@ import java.time.OffsetDateTime;
 @Repository
 public interface AuditLogRepository extends JpaRepository<AuditLog, Long> {
 
-    @Query("""
-            SELECT a FROM AuditLog a
-            WHERE (:modelName IS NULL OR a.modelName = :modelName)
-              AND (:mode IS NULL OR CAST(a.mode AS string) = :mode)
-              AND (:status IS NULL OR CAST(a.status AS string) = :status)
-              AND (:source IS NULL OR CAST(a.source AS string) = :source)
-              AND (:from IS NULL OR a.createdAt >= :from)
-              AND (:to IS NULL OR a.createdAt <= :to)
-            ORDER BY a.createdAt DESC
-            """)
+    @Query(value = """
+            SELECT * FROM audit_log
+            WHERE (:modelName IS NULL OR model_name = :modelName)
+              AND (:mode     IS NULL OR mode::text   = :mode)
+              AND (:status   IS NULL OR status::text = :status)
+              AND (:source   IS NULL OR source::text = :source)
+              AND (:from::timestamptz IS NULL OR created_at >= :from::timestamptz)
+              AND (:to::timestamptz   IS NULL OR created_at <= :to::timestamptz)
+            ORDER BY created_at DESC
+            """,
+            countQuery = """
+            SELECT COUNT(*) FROM audit_log
+            WHERE (:modelName IS NULL OR model_name = :modelName)
+              AND (:mode     IS NULL OR mode::text   = :mode)
+              AND (:status   IS NULL OR status::text = :status)
+              AND (:source   IS NULL OR source::text = :source)
+              AND (:from::timestamptz IS NULL OR created_at >= :from::timestamptz)
+              AND (:to::timestamptz   IS NULL OR created_at <= :to::timestamptz)
+            """,
+            nativeQuery = true)
     Page<AuditLog> search(@Param("modelName") String modelName,
                           @Param("mode") String mode,
                           @Param("status") String status,

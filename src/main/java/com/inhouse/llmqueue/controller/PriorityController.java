@@ -10,50 +10,49 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+
 import java.util.Map;
 
 @RestController
 @RequiredArgsConstructor
-@Tag(name = "Priority", description = "Priority requests - reserves a slot and dispatches in a single call")
+@Tag(name = "Priority", description = "Priority requests - capacity checked then dispatched immediately")
 public class PriorityController {
 
     private final PriorityService priorityService;
 
-    @Operation(
-        summary = "Submit a priority request"
-    )
+    @Operation(summary = "Submit a priority request")
     @RequestBody(
         required = true,
         content = @Content(
             mediaType = "application/json",
             schema = @Schema(type = "object"),
             examples = {
-                @ExampleObject(name = "First call - reserve and dispatch", value = """
-                    {
-                        "model": "aether-nova",
-                        "reserve_resource": true,
-                        "messages": [
-                            { "role": "system", "content": "You are a helpful assistant." },
-                            { "role": "user", "content": "Hello" }
-                        ],
-                        "max_tokens": 500,
-                        "chat_template_kwargs": { "enable_thinking": false },
-                        "temperature": 0.2
-                    }
-                    """),
-                @ExampleObject(name = "Subsequent call - existing session", value = """
-                    {
-                        "model": "aether-nova",
-                        "session_id": "your-session-id-from-first-call",
-                        "messages": [
-                            { "role": "system", "content": "You are a helpful assistant." },
-                            { "role": "user", "content": "How are you?" }
-                        ],
-                        "max_tokens": 500,
-                        "chat_template_kwargs": { "enable_thinking": false },
-                        "temperature": 0.2
-                    }
-                    """)
+                @ExampleObject(name = "1 - First call: request a session",
+                    value = """
+                        {
+                            "model": "bolt-halo",
+                            "resource_request": true,
+                            "messages": [
+                                { "role": "system", "content": "You are a helpful assistant." },
+                                { "role": "user", "content": "Hello" }
+                            ],
+                            "max_tokens": 500,
+                            "temperature": 0.2
+                        }
+                        """),
+                @ExampleObject(name = "2 - Subsequent calls: use the session",
+                    value = """
+                        {
+                            "model": "bolt-halo",
+                            "session_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+                            "messages": [
+                                { "role": "system", "content": "You are a helpful assistant." },
+                                { "role": "user", "content": "Follow-up question" }
+                            ],
+                            "max_tokens": 500,
+                            "temperature": 0.2
+                        }
+                        """)
             }
         )
     )
@@ -62,30 +61,7 @@ public class PriorityController {
             @org.springframework.web.bind.annotation.RequestBody Map<String, Object> payload) {
 
         String modelName = extractModelName(payload);
-
-        Object reserveRaw = payload.get("reserve_resource");
-        boolean reserveResource = reserveRaw instanceof Boolean b && b;
-
-        payload.remove("reserve_resource");
-        payload.remove("session_id");
-
-        if (reserveResource) {
-            // first call - check capacity, reserve slot, then dispatch
-            Map<String, Object> reservation = priorityService.reserveResource(modelName);
-            boolean allocated = (boolean) reservation.get("resource_allocated");
-            if (!allocated) {
-                return ResponseEntity.status(503).body(reservation);
-            }
-            // slot reserved - dispatch immediately with the session
-            String sessionId = (String) reservation.get("session_id");
-            Map<String, Object> response = priorityService.dispatch(modelName, payload, sessionId);
-            response = new java.util.HashMap<>(response);
-            response.put("session_id", sessionId);
-            return ResponseEntity.ok(response);
-        }
-
-        // subsequent call - session already exists, dispatch directly
-        Map<String, Object> response = priorityService.dispatch(modelName, payload, null);
+        Map<String, Object> response = priorityService.handle(modelName, payload);
         return ResponseEntity.ok(response);
     }
 

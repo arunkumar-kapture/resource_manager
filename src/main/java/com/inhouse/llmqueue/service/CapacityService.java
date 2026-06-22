@@ -4,13 +4,13 @@ import com.inhouse.llmqueue.entity.ModelConfig;
 import com.inhouse.llmqueue.metrics.MetricsScraper;
 import com.inhouse.llmqueue.metrics.VllmMetrics;
 import com.inhouse.llmqueue.repository.ModelConfigRepository;
-import com.inhouse.llmqueue.repository.RequestLogRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import java.time.OffsetDateTime;
+import java.time.Instant;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
@@ -18,59 +18,70 @@ import java.util.concurrent.ConcurrentHashMap;
 @RequiredArgsConstructor
 public class CapacityService {
 
-    private final RequestLogRepository requestLogRepository;
+    private final RpmCounter rpmCounter;
     private final ModelConfigRepository modelConfigRepository;
     private final MetricsScraper metricsScraper;
 
-    // sessionId -> { modelName, lastSeenAt } - kept for session touch/release lifecycle only
-    private final ConcurrentHashMap<String, SessionEntry> activeSessions = new ConcurrentHashMap<>();
+    private static final long SESSION_TTL_SECONDS = 90;
 
-    private static class SessionEntry {
-        final String modelName;
-        volatile long lastSeenAt;
+    // requestId -> allocation timestamp; evicted after SESSION_TTL_SECONDS
+    private final ConcurrentHashMap<UUID, Instant> activeSessions = new ConcurrentHashMap<>();
 
-        SessionEntry(String modelName) {
-            this.modelName = modelName;
-            this.lastSeenAt = System.currentTimeMillis();
+    public long currentRpm(String modelName) {
+        return rpmCounter.count(modelName);
+    }
+
+    /** Called when a priority request is accepted and dispatched. */
+    public void registerSession(UUID requestId) {
+        evictExpiredSessions();
+        activeSessions.put(requestId, Instant.now());
+        log.info("[PRIORITY] Session registered: {} | Active sessions: {}", requestId, activeSessions.size());
+    }
+
+    /**
+     * Atomically validates the session and refreshes its timestamp in one operation.
+     * Returns true if the session existed and was within TTL (and is now touched).
+     * Returns false if the session was absent or expired.
+     * Replaces the separate isSessionValid + touchSession calls to eliminate the
+     * window where the scheduled eviction could remove the session between the two calls.
+     */
+    public boolean touchAndValidateSession(UUID sessionId) {
+        Instant cutoff = Instant.now().minusSeconds(SESSION_TTL_SECONDS);
+        // computeIfPresent is atomic on ConcurrentHashMap — either updates or does nothing
+        Instant updated = activeSessions.computeIfPresent(sessionId,
+                (id, prev) -> prev.isAfter(cutoff) ? Instant.now() : null);
+        // returning null from computeIfPresent removes the key; non-null means valid + touched
+        boolean valid = updated != null;
+        if (valid) {
+            log.debug("[PRIORITY] Session touched: {} | Active sessions: {}", sessionId, activeSessions.size());
+        }
+        return valid;
+    }
+
+    /** Called when a priority session ends (LLM call failed on resource_request). */
+    public void releaseSession(UUID sessionId) {
+        activeSessions.remove(sessionId);
+        log.info("[PRIORITY] Session released: {} | Active sessions: {}", sessionId, activeSessions.size());
+    }
+
+    // Runs every 60s as a safety net — catches sessions that were never released (e.g. crashed requests)
+    @Scheduled(fixedDelay = 60_000)
+    public void evictExpiredSessionsScheduled() {
+        evictExpiredSessions();
+        if (!activeSessions.isEmpty()) {
+            log.info("[PRIORITY] Scheduled eviction complete | Active sessions: {}", activeSessions.size());
         }
     }
 
-    public void registerSession(String sessionId, String modelName) {
-        activeSessions.put(sessionId, new SessionEntry(modelName));
-        log.info("[PRIORITY] Session {} registered for model {}", sessionId, modelName);
-    }
-
-    public void touchSession(String sessionId) {
-        SessionEntry entry = activeSessions.get(sessionId);
-        if (entry != null) {
-            entry.lastSeenAt = System.currentTimeMillis();
-        }
-    }
-
-    public void releaseSession(String sessionId) {
-        SessionEntry entry = activeSessions.remove(sessionId);
-        if (entry != null) {
-            log.info("[PRIORITY] Session {} released for model {}", sessionId, entry.modelName);
-        }
-    }
-
-    /** Every 30s - evict sessions not seen for 60s (assume ended). */
-    @Scheduled(fixedDelay = 30_000)
-    public void evictExpiredSessions() {
-        long cutoff = System.currentTimeMillis() - 60_000;
+    private void evictExpiredSessions() {
+        Instant cutoff = Instant.now().minusSeconds(SESSION_TTL_SECONDS);
         activeSessions.entrySet().removeIf(entry -> {
-            if (entry.getValue().lastSeenAt < cutoff) {
-                log.info("[PRIORITY] Session {} for model {} expired after 60s inactivity - evicting",
-                        entry.getKey(), entry.getValue().modelName);
+            if (entry.getValue().isBefore(cutoff)) {
+                log.debug("[PRIORITY] Session evicted (TTL expired): {}", entry.getKey());
                 return true;
             }
             return false;
         });
-    }
-
-    public long currentRpm(String modelName) {
-        return requestLogRepository.countByModelNameAndCreatedAtAfter(
-                modelName, OffsetDateTime.now().minusSeconds(60));
     }
 
     public ModelConfig getActiveConfig(String modelName) {
@@ -129,19 +140,21 @@ public class CapacityService {
     }
 
     /**
-     * Batch capacity check - single condition:
-     *   currentRpm < rpmLimit * batchThresholdPct
-     * If load is at or above that fraction, hold and retry next poll cycle.
+     * Batch capacity check:
+     *   freeRatio = 1 - (currentRpm / rpmLimit)
+     *   freeRatio >= batchThresholdPct -> proceed
+     *
+     * batchThresholdPct = 0.7 means at least 70% of rpm capacity must be free.
      */
     public boolean hasBatchCapacity(String modelName) {
         ModelConfig config = getActiveConfig(modelName);
         long rpm = currentRpm(modelName);
-        double loadRatio = (double) rpm / config.getRpmLimit();
-        boolean available = loadRatio >= config.getBatchThresholdPct();
+        double freeRatio = 1.0 - (double) rpm / config.getRpmLimit();
+        boolean available = freeRatio >= config.getBatchThresholdPct();
         if (!available) {
-            log.debug("[BATCH] Model {} - load ratio {}/{} = {}% < batch threshold {}%, holding",
-                    modelName, rpm, config.getRpmLimit(),
-                    String.format("%.0f", loadRatio * 100),
+            log.debug("[BATCH] Model {} - free capacity {}% < required {}%, holding",
+                    modelName,
+                    String.format("%.0f", freeRatio * 100),
                     String.format("%.0f", config.getBatchThresholdPct() * 100));
         }
         return available;
@@ -162,6 +175,7 @@ public class CapacityService {
      *
      * Both thresholds (maxConcurrentRequests, p95ThresholdSeconds) are configured per-model via /admin/models.
      */
+    
     public boolean hasPriorityCapacity(String modelName) {
         ModelConfig config = getActiveConfig(modelName);
         VllmMetrics metrics = metricsScraper.getMetrics(modelName);

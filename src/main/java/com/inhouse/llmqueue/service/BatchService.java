@@ -20,29 +20,22 @@ public class BatchService {
     private final QueueService queueService;
 
     public Map<String, Object> handle(String modelName, Map<String, Object> payload) {
-        // always queue - batch requests never dispatch immediately
         OffsetDateTime scheduledAt = extractScheduledAt(payload);
+        if (scheduledAt == null) {
+            throw new IllegalArgumentException("scheduled_at is required for batch requests. Expected format: 2026-06-19T15:00:00 or 2026-06-19T15:00:00Z");
+        }
         payload.remove("scheduled_at");
 
         capacityService.getActiveConfig(modelName); // validates model is active
 
         var queued = queueService.enqueue(modelName, RequestMode.batch, (short) 3, payload, scheduledAt);
 
-        if (scheduledAt != null) {
-            log.info("[BATCH] Request {} queued for model {} - scheduled at {} (UTC)", queued.getId(), modelName, scheduledAt);
-            return Map.of(
-                    "request_id", queued.getId().toString(),
-                    "status", "queued",
-                    "scheduled_at", scheduledAt.toString(),
-                    "message", "Request queued - will be processed at " + scheduledAt
-            );
-        }
-
-        log.info("[BATCH] Request {} queued for model {} - will be processed when resources are available", queued.getId(), modelName);
+        log.info("[BATCH] Request {} queued for model {} - scheduled at {} (UTC)", queued.getId(), modelName, scheduledAt);
         return Map.of(
                 "request_id", queued.getId().toString(),
                 "status", "queued",
-                "message", "Request queued - will be processed when resources are available"
+                "scheduled_at", scheduledAt.toString(),
+                "message", "Request queued - will be processed at " + scheduledAt
         );
     }
 
@@ -58,7 +51,7 @@ public class BatchService {
                 return LocalDateTime.parse(value, DateTimeFormatter.ISO_LOCAL_DATE_TIME)
                         .atOffset(ZoneOffset.UTC);
             } catch (Exception e2) {
-                log.warn("[BATCH] Invalid scheduled_at value '{}' - expected: 2026-06-18T10:30:00 or 2026-06-18T10:30:00Z", value);
+                log.warn("[BATCH] Invalid scheduled_at value '{}' - expected: 2026-06-19T15:00:00 or 2026-06-19T15:00:00Z", value);
                 return null;
             }
         }

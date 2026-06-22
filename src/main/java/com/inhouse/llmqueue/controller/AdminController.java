@@ -77,23 +77,34 @@ public class AdminController {
                 .orElseThrow(() -> new RuntimeException("Model not found: " + modelName));
 
         if (body.containsKey("rpm_limit")) {
-            config.setRpmLimit(((Number) body.get("rpm_limit")).intValue());
+            int v = ((Number) body.get("rpm_limit")).intValue();
+            if (v <= 0) throw new IllegalArgumentException("rpm_limit must be > 0");
+            config.setRpmLimit(v);
         }
         if (body.containsKey("batch_threshold_pct")) {
-            config.setBatchThresholdPct(((Number) body.get("batch_threshold_pct")).doubleValue());
+            double v = ((Number) body.get("batch_threshold_pct")).doubleValue();
+            if (v <= 0 || v > 1) throw new IllegalArgumentException("batch_threshold_pct must be between 0 and 1");
+            config.setBatchThresholdPct(v);
         }
         if (body.containsKey("max_concurrent_requests")) {
-            config.setMaxConcurrentRequests(((Number) body.get("max_concurrent_requests")).intValue());
+            int v = ((Number) body.get("max_concurrent_requests")).intValue();
+            if (v <= 0) throw new IllegalArgumentException("max_concurrent_requests must be > 0");
+            config.setMaxConcurrentRequests(v);
         }
         if (body.containsKey("p95_threshold_seconds")) {
-            config.setP95ThresholdSeconds(((Number) body.get("p95_threshold_seconds")).doubleValue());
+            double v = ((Number) body.get("p95_threshold_seconds")).doubleValue();
+            if (v <= 0) throw new IllegalArgumentException("p95_threshold_seconds must be > 0");
+            config.setP95ThresholdSeconds(v);
         }
         if (body.containsKey("load_score_threshold")) {
-            config.setLoadScoreThreshold(((Number) body.get("load_score_threshold")).doubleValue());
+            double v = ((Number) body.get("load_score_threshold")).doubleValue();
+            if (v <= 0) throw new IllegalArgumentException("load_score_threshold must be > 0");
+            config.setLoadScoreThreshold(v);
         }
         if (body.containsKey("metrics_urls")) {
             @SuppressWarnings("unchecked")
             List<String> urls = (List<String>) body.get("metrics_urls");
+            if (urls == null || urls.isEmpty()) throw new IllegalArgumentException("metrics_urls must not be empty");
             config.setMetricsUrls(urls);
         }
         if (body.containsKey("active")) {
@@ -148,7 +159,7 @@ public class AdminController {
                 stat.put("num_requests_running", metrics.getNumRequestsRunning());
                 stat.put("num_requests_waiting", metrics.getNumRequestsWaiting());
                 stat.put("kv_cache_usage_pct", metrics.getKvCacheUsagePct());
-                stat.put("recent_avg_ttft_ms", Math.round(metrics.getRecentAvgTtftSeconds() * 1000));
+                stat.put("p95_ttft_ms", Math.round(metrics.getP95TtftSeconds() * 1000));
             }
             result.put(m.getModelName(), stat);
         }

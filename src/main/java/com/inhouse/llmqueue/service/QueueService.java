@@ -1,11 +1,9 @@
 package com.inhouse.llmqueue.service;
 
 import com.inhouse.llmqueue.entity.QueueRequest;
-import com.inhouse.llmqueue.entity.RequestLog;
 import com.inhouse.llmqueue.enums.RequestMode;
 import com.inhouse.llmqueue.enums.RequestStatus;
 import com.inhouse.llmqueue.repository.QueueRequestRepository;
-import com.inhouse.llmqueue.repository.RequestLogRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,7 +18,7 @@ import java.util.UUID;
 public class QueueService {
 
     private final QueueRequestRepository queueRequestRepository;
-    private final RequestLogRepository requestLogRepository;
+    private final RpmCounter rpmCounter;
 
     @Transactional
     public QueueRequest enqueue(String modelName, RequestMode mode, short priorityWeight,
@@ -45,11 +43,8 @@ public class QueueService {
         return queueRequestRepository.countQueued(modelName);
     }
 
-    @Transactional
+    /** Record one dispatch event in Redis — increments the sliding 60s RPM counter. */
     public void logDispatched(String modelName, RequestMode mode) {
-        RequestLog log = new RequestLog();
-        log.setModelName(modelName);
-        log.setMode(mode);
-        requestLogRepository.save(log);
+        rpmCounter.record(modelName);
     }
 }

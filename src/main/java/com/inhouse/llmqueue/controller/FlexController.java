@@ -15,7 +15,7 @@ import java.util.Map;
 
 @RestController
 @RequiredArgsConstructor
-@Tag(name = "Flex", description = "Queues request if no capacity, escalates after 9s, times out at 30s")
+@Tag(name = "Flex", description = "Queues request if no capacity, escalates after 8s, times out at 30s")
 public class FlexController {
 
     private final FlexService flexService;

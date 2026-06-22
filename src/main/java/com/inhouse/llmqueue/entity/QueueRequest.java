@@ -22,6 +22,10 @@ public class QueueRequest {
     @Column(name = "id")
     private UUID id;
 
+    @Version
+    @Column(name = "version", nullable = false)
+    private long version;
+
     @Column(name = "model_name", nullable = false)
     private String modelName;
 

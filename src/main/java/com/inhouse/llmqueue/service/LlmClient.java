@@ -18,29 +18,27 @@ import java.util.Map;
 @Component
 public class LlmClient {
 
-    @Value("${llm.base-url}")
-    private String baseUrl;
-
-    @Value("${llm.auth-token}")
-    private String authToken;
-
-    @Value("${llm.connect-timeout-seconds:10}")
-    private int connectTimeout;
-
-    @Value("${llm.read-timeout-seconds:120}")
-    private int readTimeout;
-
+    private final String baseUrl;
+    private final String authToken;
+    private final int readTimeout;
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
 
-    public LlmClient(ObjectMapper objectMapper) {
+    public LlmClient(
+            @Value("${llm.base-url}") String baseUrl,
+            @Value("${llm.auth-token}") String authToken,
+            @Value("${llm.connect-timeout-seconds:10}") int connectTimeout,
+            @Value("${llm.read-timeout-seconds:120}") int readTimeout,
+            ObjectMapper objectMapper) {
+        this.baseUrl = baseUrl;
+        this.authToken = authToken;
+        this.readTimeout = readTimeout;
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(10))
+                .connectTimeout(Duration.ofSeconds(connectTimeout))
                 .build();
     }
 
-    @SuppressWarnings("unchecked")
     public Map<String, Object> chat(String modelName, Map<String, Object> payload) throws IOException, InterruptedException {
         String url = baseUrl + "/" + modelName + "/v1/chat/completions";
         String body = objectMapper.writeValueAsString(payload);
@@ -59,6 +57,7 @@ public class LlmClient {
             throw new LlmInvocationException("LLM returned HTTP " + response.statusCode() + ": " + response.body());
         }
 
-        return objectMapper.readValue(response.body(), Map.class);
+        return objectMapper.readValue(response.body(),
+                objectMapper.getTypeFactory().constructMapType(Map.class, String.class, Object.class));
     }
 }
